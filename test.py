@@ -68,6 +68,7 @@ def send_help(message):
 /view [название] - показать участников конкретной очереди
 /join [название] - присоединиться к очереди
 /exit [название] - выйти из очереди
+/setname [имя] - установить своё отображаемое имя
 
 *Команды администраторов:*
 /create [название] - создать новую очередь
@@ -80,6 +81,7 @@ def send_help(message):
 /view - посмотреть все очереди
 /view Математика - посмотреть очередь "Математика"
 /delete Математика - удалить очередь "Математика"
+/setname Иван - установить имя "Иван"
 """
     bot.reply_to(message, help_text, parse_mode="Markdown")
     
@@ -407,7 +409,7 @@ def view_queue(message):
                 
                 # Получаем список участников очереди
                 cursor.execute("""
-                    SELECT u.display_name, qm.join_order 
+                    SELECT u.display_name, u.username, qm.join_order 
                     FROM QueueMembers qm 
                     JOIN Users u ON qm.user_id = u.user_id 
                     WHERE qm.queue_id = ? 
@@ -421,12 +423,42 @@ def view_queue(message):
                     return
                 
                 # Формируем сообщение со списком участников
-                queue_list = "\n".join([f"{i}. {name}" for name, i in queue_members])
+                queue_list = "\n".join([
+                    f"{i}. {name} (@{username})" if username else f"{i}. {name}"
+                    for name, username, i in queue_members
+                ])
                 
                 bot.reply_to(message, f"Очередь '{queue_name}'\nСоздатель: {creator_name}\nКоличество участников: {len(queue_members)}\n\n{queue_list}")
     
     except Exception as e:
         bot.reply_to(message, f"Произошла ошибка при просмотре очереди: {str(e)}")
+
+@bot.message_handler(commands=['setname'])
+def set_custom_name(message):
+    try:
+        # Получаем текст после команды /setname
+        command_parts = message.text.split(' ', 1)
+        
+        # Проверяем, указано ли новое имя
+        if len(command_parts) < 2:
+            bot.reply_to(message, "Пожалуйста, укажите ваше новое имя. Пример: /setname Иван")
+            return
+        
+        new_name = command_parts[1].strip()
+        user_id = message.from_user.id
+        
+        # Используем блокировку для безопасного доступа к базе данных
+        with db_lock:
+            cursor.execute("UPDATE Users SET display_name = ? WHERE user_id = ?", 
+                          (new_name, user_id))
+            connection.commit()
+            
+        bot.reply_to(message, f"Ваше имя успешно изменено на '{new_name}'!")
+    
+    except Exception as e:
+        bot.reply_to(message, f"Произошла ошибка при изменении имени: {str(e)}")
+        with db_lock:
+            connection.rollback()
 
 # Запуск бота
 bot.polling()
