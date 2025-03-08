@@ -1,9 +1,13 @@
 import os
+from dotenv import load_dotenv
 
-# Токен бота Telegram
-# В идеале токен должен храниться в переменных окружения
-# BOT_TOKEN = os.environ.get('BOT_TOKEN')
-BOT_TOKEN = '7365658286:AAGQ7Ob2FUAH1Vpc0oLSrZebKth7xZ2M3e0'
+# Загружаем переменные окружения из файла .env
+load_dotenv()
+
+# Токен бота Telegram из переменных окружения
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+if not BOT_TOKEN:
+    raise ValueError("Environment variable BOT_TOKEN is not set. Please set it before running the bot.")
 
 # Настройки базы данных
 DB_NAME = 'botdb.db'
