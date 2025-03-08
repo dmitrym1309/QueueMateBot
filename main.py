@@ -25,5 +25,6 @@ if __name__ == "__main__":
         
         logger.info("Starting bot...")
         start_bot()
+        logger.info("Bot started successfully")
     except Exception as e:
         logger.error(f"Error starting bot: {str(e)}", exc_info=True) 
