@@ -18,7 +18,7 @@ bot_running = True
 # Функция для обработки ошибок
 def handle_error(message, error, operation):
     error_text = str(error)
-    logger.error(f"Ошибка при {operation}: {error_text}", exc_info=True)
+    logger.error(f"Error during {operation}: {error_text}", exc_info=True)
     bot.reply_to(message, f"Произошла ошибка при {operation}: {error_text}")
 
 # Обработчик команды /start
@@ -376,51 +376,51 @@ def update_user_info(user_id, username, first_name, last_name):
 # Функция для остановки бота
 def stop_bot():
     global bot_running
-    logger.info("===== Остановка бота QueueMateBot =====")
+    logger.info("===== QueueMateBot stopping =====")
     bot_running = False
     # Останавливаем поллинг бота
     bot.stop_polling()
-    logger.info("Бот остановлен")
+    logger.info("Bot stopped")
     logger.info("=======================================")
 
 # Функция для чтения команд из консоли
 def console_listener():
     global bot_running
-    logger.info("Консольный интерфейс запущен. Доступные команды: stop, exit, quit, status")
+    logger.info("Console interface started. Available commands: stop, exit, quit, status")
     
     while bot_running:
         try:
             command = input().strip().lower()
             
             if command in ['stop', 'exit', 'quit']:
-                logger.info("Получена команда остановки бота из консоли")
+                logger.info("Stop command received from console")
                 stop_bot()
                 break
             elif command == 'status':
-                logger.info(f"Статус бота: {'работает' if bot_running else 'остановлен'}")
-                print(f"Статус бота: {'работает' if bot_running else 'остановлен'}")
+                logger.info(f"Bot status: {'running' if bot_running else 'stopped'}")
+                print(f"Bot status: {'running' if bot_running else 'stopped'}")
             elif command == 'help':
-                print("Доступные команды:")
-                print("  stop, exit, quit - остановить бота")
-                print("  status - проверить статус бота")
-                print("  help - показать эту справку")
+                print("Available commands:")
+                print("  stop, exit, quit - stop the bot")
+                print("  status - check bot status")
+                print("  help - show this help message")
             else:
-                print(f"Неизвестная команда: {command}")
-                print("Введите 'help' для получения списка команд")
+                print(f"Unknown command: {command}")
+                print("Type 'help' to see available commands")
         except Exception as e:
-            logger.error(f"Ошибка в консольном интерфейсе: {str(e)}", exc_info=True)
+            logger.error(f"Error in console interface: {str(e)}", exc_info=True)
     
-    logger.info("Консольный интерфейс остановлен")
+    logger.info("Console interface stopped")
 
 # Функция для запуска бота
 def start_bot():
     global bot_running
     bot_running = True
     
-    logger.info("===== Бот QueueMateBot запущен =====")
-    logger.info(f"Имя бота: {bot.get_me().first_name}")
-    logger.info(f"Username бота: @{bot.get_me().username}")
-    logger.info(f"ID бота: {bot.get_me().id}")
+    logger.info("===== QueueMateBot started =====")
+    logger.info(f"Bot name: {bot.get_me().first_name}")
+    logger.info(f"Bot username: @{bot.get_me().username}")
+    logger.info(f"Bot ID: {bot.get_me().id}")
     logger.info("====================================")
     
     # Запускаем поток для чтения команд из консоли
@@ -431,9 +431,9 @@ def start_bot():
         # Запускаем бота
         bot.polling(none_stop=True, interval=1)
     except Exception as e:
-        logger.error(f"Ошибка при работе бота: {str(e)}", exc_info=True)
+        logger.error(f"Error during bot operation: {str(e)}", exc_info=True)
     finally:
         bot_running = False
-        logger.info("Бот завершил работу")
+        logger.info("Bot has finished working")
     
     return bot 
