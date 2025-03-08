@@ -592,3 +592,198 @@ def start_bot():
         logger.info("Bot has finished working")
     
     return bot 
+
+# Обработчик команды /remove - удаление пользователя из очереди администратором
+@bot.message_handler(commands=['remove'])
+def remove_user_admin(message):
+    try:
+        # Получаем текст после команды /remove
+        command_parts = message.text.split(' ', 2)
+        
+        # Проверяем, указаны ли все необходимые параметры
+        if len(command_parts) < 3:
+            bot.reply_to(message, "Пожалуйста, укажите название очереди и имя пользователя или @username. Пример: `/remove Математика @username` или `/remove Математика Иван`", parse_mode="Markdown")
+            return
+        
+        queue_name = command_parts[1].strip()
+        user_identifier = command_parts[2].strip()
+        chat_id = message.chat.id
+        admin_id = message.from_user.id
+        
+        # Проверяем, является ли пользователь администратором или создателем чата
+        chat_member = bot.get_chat_member(chat_id, admin_id)
+        if chat_member.status not in ['administrator', 'creator']:
+            bot.reply_to(message, "Только администраторы могут удалять пользователей из очереди.")
+            return
+        
+        # Проверяем существование очереди
+        queue_id = db.get_queue_id(queue_name, chat_id)
+        if not queue_id:
+            bot.reply_to(message, f"Очередь '{queue_name}' не найдена в этом чате.")
+            return
+        
+        # Получаем список участников очереди
+        queue_members = db.get_queue_members(queue_id)
+        if not queue_members:
+            bot.reply_to(message, f"Очередь '{queue_name}' пуста.")
+            return
+        
+        # Ищем пользователя по идентификатору (имя или @username)
+        user_found = False
+        user_id = None
+        user_order = None
+        user_name = None
+        
+        for name, username, order, uid in queue_members:
+            # Проверяем совпадение по username (если указан с @ или без)
+            if username and (user_identifier.lower() == username.lower() or 
+                            user_identifier.lower() == f"@{username}".lower()):
+                user_found = True
+                user_id = uid
+                user_order = order
+                user_name = name
+                break
+            
+            # Проверяем совпадение по имени
+            if name.lower() == user_identifier.lower():
+                user_found = True
+                user_id = uid
+                user_order = order
+                user_name = name
+                break
+        
+        if not user_found:
+            bot.reply_to(message, f"Пользователь '{user_identifier}' не найден в очереди '{queue_name}'.")
+            return
+        
+        # Удаляем пользователя из очереди
+        db.remove_user_from_queue(queue_id, user_id, user_order)
+        
+        # Формируем сообщение с обновленной информацией об очереди
+        queue_info = format_queue_info(queue_name, queue_id)
+        
+        bot.reply_to(message, f"Пользователь '{user_name}' удален из очереди '{queue_name}'.\n\n{queue_info}", parse_mode="Markdown")
+        logger.info(f"Admin {admin_id} removed user {user_id} ({user_name}) from queue '{queue_name}'")
+    
+    except Exception as e:
+        handle_error(message, e, "удалении пользователя из очереди")
+
+# Обработчик команды /setposition - установка позиции участника в очереди
+@bot.message_handler(commands=['setposition'])
+def set_user_position(message):
+    try:
+        # Получаем текст после команды /setposition
+        command_parts = message.text.split(' ', 3)
+        
+        # Проверяем, указаны ли все необходимые параметры
+        if len(command_parts) < 4:
+            bot.reply_to(message, "Пожалуйста, укажите название очереди, имя пользователя или @username и новую позицию. Пример: `/setposition Математика @username 1` или `/setposition Математика Иван 3`", parse_mode="Markdown")
+            return
+        
+        queue_name = command_parts[1].strip()
+        user_identifier = command_parts[2].strip()
+        
+        # Проверяем, что новая позиция - число
+        try:
+            new_position = int(command_parts[3].strip())
+            if new_position < 1:
+                bot.reply_to(message, "Позиция должна быть положительным числом.")
+                return
+        except ValueError:
+            bot.reply_to(message, "Позиция должна быть числом.")
+            return
+        
+        chat_id = message.chat.id
+        admin_id = message.from_user.id
+        
+        # Проверяем, является ли пользователь администратором или создателем чата
+        chat_member = bot.get_chat_member(chat_id, admin_id)
+        if chat_member.status not in ['administrator', 'creator']:
+            bot.reply_to(message, "Только администраторы могут изменять позиции участников в очереди.")
+            return
+        
+        # Проверяем существование очереди
+        queue_id = db.get_queue_id(queue_name, chat_id)
+        if not queue_id:
+            bot.reply_to(message, f"Очередь '{queue_name}' не найдена в этом чате.")
+            return
+        
+        # Получаем список участников очереди
+        queue_members = db.get_queue_members(queue_id)
+        if not queue_members:
+            bot.reply_to(message, f"Очередь '{queue_name}' пуста.")
+            return
+        
+        # Проверяем, что новая позиция не превышает количество участников
+        if new_position > len(queue_members):
+            bot.reply_to(message, f"Позиция не может быть больше количества участников ({len(queue_members)}).")
+            return
+        
+        # Ищем пользователя по идентификатору (имя или @username)
+        user_found = False
+        user_id = None
+        user_order = None
+        user_name = None
+        
+        for name, username, order, uid in queue_members:
+            # Проверяем совпадение по username (если указан с @ или без)
+            if username and (user_identifier.lower() == username.lower() or 
+                            user_identifier.lower() == f"@{username}".lower()):
+                user_found = True
+                user_id = uid
+                user_order = order
+                user_name = name
+                break
+            
+            # Проверяем совпадение по имени
+            if name.lower() == user_identifier.lower():
+                user_found = True
+                user_id = uid
+                user_order = order
+                user_name = name
+                break
+        
+        if not user_found:
+            bot.reply_to(message, f"Пользователь '{user_identifier}' не найден в очереди '{queue_name}'.")
+            return
+        
+        # Если текущая позиция совпадает с новой, ничего не делаем
+        if user_order == new_position:
+            bot.reply_to(message, f"Пользователь '{user_name}' уже находится на позиции {new_position}.")
+            return
+        
+        # Изменяем позицию пользователя в очереди
+        with db.db_lock:
+            # Временно удаляем пользователя из очереди
+            db.cursor.execute("DELETE FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
+                            (queue_id, user_id))
+            
+            # Если перемещаем вверх (на меньшую позицию)
+            if new_position < user_order:
+                db.cursor.execute("""
+                    UPDATE QueueMembers 
+                    SET join_order = join_order + 1 
+                    WHERE queue_id = ? AND join_order >= ? AND join_order < ?
+                """, (queue_id, new_position, user_order))
+            # Если перемещаем вниз (на большую позицию)
+            else:
+                db.cursor.execute("""
+                    UPDATE QueueMembers 
+                    SET join_order = join_order - 1 
+                    WHERE queue_id = ? AND join_order > ? AND join_order <= ?
+                """, (queue_id, user_order, new_position))
+            
+            # Добавляем пользователя на новую позицию
+            db.cursor.execute("INSERT INTO QueueMembers (queue_id, user_id, join_order) VALUES (?, ?, ?)", 
+                            (queue_id, user_id, new_position))
+            
+            db.connection.commit()
+        
+        # Формируем сообщение с обновленной информацией об очереди
+        queue_info = format_queue_info(queue_name, queue_id)
+        
+        bot.reply_to(message, f"Пользователь '{user_name}' перемещен на позицию {new_position} в очереди '{queue_name}'.\n\n{queue_info}", parse_mode="Markdown")
+        logger.info(f"Admin {admin_id} moved user {user_id} ({user_name}) to position {new_position} in queue '{queue_name}'")
+    
+    except Exception as e:
+        handle_error(message, e, "изменении позиции пользователя") 
