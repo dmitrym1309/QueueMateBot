@@ -1,1 +1,30 @@
- 
+ # Игнорировать файлы логов
+*.log
+logs/
+
+# Игнорировать файлы базы данных
+*.db
+*.sqlite
+*.sqlite3
+
+# Игнорировать кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Игнорировать виртуальное окружение
+venv/
+env/
+ENV/
+
+# Игнорировать файлы IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Игнорировать файлы конфигурации с секретами
+.env
