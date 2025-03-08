@@ -275,9 +275,19 @@ def set_custom_name(message):
         # Получаем текст после команды /setname
         command_parts = message.text.split(' ', 1)
         
-        # Проверяем, указано ли новое имя
+        # Если после /setname ничего нет, сбрасываем имя на имя из Telegram
         if len(command_parts) < 2:
-            bot.reply_to(message, "Пожалуйста, укажите ваше новое имя. Пример: `/setname Иван`", parse_mode="Markdown")
+            user_id = message.from_user.id
+            
+            # Получаем имя пользователя из Telegram
+            telegram_name = message.from_user.first_name
+            if message.from_user.last_name:
+                telegram_name += " " + message.from_user.last_name
+            
+            # Обновляем имя пользователя в базе данных
+            db.update_user_display_name(user_id, telegram_name)
+            
+            bot.reply_to(message, f"Ваше имя сброшено на стандартное из Telegram: '{telegram_name}'!")
             return
         
         new_name = command_parts[1].strip()
@@ -286,24 +296,7 @@ def set_custom_name(message):
         # Обновляем имя пользователя в базе данных
         db.update_user_display_name(user_id, new_name)
         
-        # Получаем список всех чатов, в которых пользователь состоит в очередях
-        chat_id = message.chat.id
-        
-        # Получаем список всех очередей в текущем чате
-        queues = db.get_all_queues(chat_id)
-        
-        # Проверяем, в каких очередях состоит пользователь
-        user_queues = []
-        for queue_name, _ in queues:
-            queue_id = db.get_queue_id(queue_name, chat_id)
-            if db.check_user_in_queue(queue_id, user_id):
-                user_queues.append(queue_name)
-        
-        if user_queues:
-            queue_list = ", ".join([f"'{name}'" for name in user_queues])
-            bot.reply_to(message, f"Ваше имя успешно изменено на '{new_name}'! Новое имя будет отображаться в очередях: {queue_list}")
-        else:
-            bot.reply_to(message, f"Ваше имя успешно изменено на '{new_name}'! Вы не состоите ни в одной очереди в этом чате.")
+        bot.reply_to(message, f"Ваше имя успешно изменено на '{new_name}'!")
     
     except Exception as e:
         bot.reply_to(message, f"Произошла ошибка при изменении имени: {str(e)}")
