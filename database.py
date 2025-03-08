@@ -118,6 +118,51 @@ def remove_user_from_queue(queue_id, user_id, user_order):
         
         connection.commit()
 
+def rejoin_queue(queue_id, user_id):
+    """Перемещение пользователя в конец очереди"""
+    with db_lock:
+        # Проверяем, есть ли пользователь в очереди
+        cursor.execute("SELECT join_order FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
+                      (queue_id, user_id))
+        result = cursor.fetchone()
+        
+        if result:
+            current_order = result[0]
+            
+            # Удаляем пользователя из очереди
+            cursor.execute("DELETE FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
+                          (queue_id, user_id))
+            
+            # Обновляем порядковые номера оставшихся участников
+            cursor.execute("""
+                UPDATE QueueMembers 
+                SET join_order = join_order - 1 
+                WHERE queue_id = ? AND join_order > ?
+            """, (queue_id, current_order))
+            
+            # Определяем новый порядковый номер для пользователя
+            cursor.execute("SELECT MAX(join_order) FROM QueueMembers WHERE queue_id = ?", (queue_id,))
+            max_order = cursor.fetchone()[0]
+            new_order = 1 if max_order is None else max_order + 1
+            
+            # Добавляем пользователя в конец очереди
+            cursor.execute("INSERT INTO QueueMembers (queue_id, user_id, join_order) VALUES (?, ?, ?)", 
+                          (queue_id, user_id, new_order))
+            
+            connection.commit()
+            return new_order
+        else:
+            # Если пользователя нет в очереди, просто добавляем его
+            cursor.execute("SELECT MAX(join_order) FROM QueueMembers WHERE queue_id = ?", (queue_id,))
+            max_order = cursor.fetchone()[0]
+            new_order = 1 if max_order is None else max_order + 1
+            
+            cursor.execute("INSERT INTO QueueMembers (queue_id, user_id, join_order) VALUES (?, ?, ?)", 
+                          (queue_id, user_id, new_order))
+            
+            connection.commit()
+            return new_order
+
 def get_queue_members(queue_id):
     """Получение списка участников очереди"""
     with db_lock:
