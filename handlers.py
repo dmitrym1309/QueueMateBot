@@ -2,9 +2,19 @@ import telebot
 import sqlite3
 from config import BOT_TOKEN, MESSAGES
 import database as db
+import logging
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 # Создаем экземпляр бота
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# Функция для обработки ошибок
+def handle_error(message, error, operation):
+    error_text = str(error)
+    logger.error(f"Ошибка при {operation}: {error_text}", exc_info=True)
+    bot.reply_to(message, f"Произошла ошибка при {operation}: {error_text}")
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -58,7 +68,7 @@ def create_queue(message):
     except sqlite3.IntegrityError:
         bot.reply_to(message, f"Очередь с названием '{queue_name}' уже существует в этом чате.")
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при создании очереди: {str(e)}")
+        handle_error(message, e, "создании очереди")
 
 # Обработчик команды /join
 @bot.message_handler(commands=['join'])
@@ -100,7 +110,7 @@ def join_queue(message):
         bot.reply_to(message, f"Вы успешно присоединились к очереди '*{queue_name}*'!\n\n{queue_info}", parse_mode="Markdown")
     
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при присоединении к очереди: {str(e)}")
+        handle_error(message, e, "присоединении к очереди")
 
 # Обработчик команды /exit
 @bot.message_handler(commands=['exit'])
@@ -145,7 +155,7 @@ def exit_queue(message):
             bot.reply_to(message, f"Вы успешно вышли из очереди '{queue_name}'.\nОчередь теперь пуста.")
     
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при выходе из очереди: {str(e)}")
+        handle_error(message, e, "выходе из очереди")
 
 # Обработчик команды /rejoin
 @bot.message_handler(commands=['rejoin'])
@@ -184,10 +194,7 @@ def rejoin_queue(message):
         bot.reply_to(message, f"Вы успешно переместились в конец очереди '*{queue_name}*'.\n\n{queue_info}", parse_mode="Markdown")
     
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"Ошибка в rejoin_queue: {error_details}")
-        bot.reply_to(message, f"Произошла ошибка при перемещении в конец очереди: {str(e)}")
+        handle_error(message, e, "перемещении в конец очереди")
 
 # Обработчик команды /delete
 @bot.message_handler(commands=['delete'])
@@ -226,7 +233,7 @@ def delete_queue(message):
         bot.reply_to(message, f"Очередь '{queue_name}' успешно удалена. Было удалено {members_count} участников.")
     
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при удалении очереди: {str(e)}")
+        handle_error(message, e, "удалении очереди")
 
 # Обработчик команды /view
 @bot.message_handler(commands=['view'])
@@ -266,7 +273,7 @@ def view_queue(message):
             bot.reply_to(message, queue_info, parse_mode="Markdown")
     
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при просмотре очереди: {str(e)}")
+        handle_error(message, e, "просмотре очереди")
 
 # Обработчик команды /setname
 @bot.message_handler(commands=['setname'])
@@ -299,7 +306,7 @@ def set_custom_name(message):
         bot.reply_to(message, f"Ваше имя успешно изменено на '{new_name}'!")
     
     except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при изменении имени: {str(e)}")
+        handle_error(message, e, "изменении имени")
 
 # Вспомогательная функция для форматирования вывода очереди
 def format_queue_info(queue_name, queue_id):
@@ -312,26 +319,25 @@ def format_queue_info(queue_name, queue_id):
     if not queue_members:
         return f"Очередь '*{queue_name}*' пуста.\nСоздатель: _{creator_name}_"
     
-    # Формируем сообщение со списком участников без моноширинного шрифта для чисел
-    queue_list = "\n".join([
-        f"{order}. {name} (@{username})" if username else f"{order}. {name}"
+    # Формируем сообщение со списком участников с использованием list comprehension
+    queue_list = "\n".join(
+        f"{order}. {name}" + (f" (@{username})" if username else "")
         for name, username, order, _ in queue_members
-    ])
+    )
     
     return f"Очередь '*{queue_name}*'\nСоздатель: _{creator_name}_\nКоличество участников: {len(queue_members)}\n\n{queue_list}"
 
 # Вспомогательная функция для обновления информации о пользователе
 def update_user_info(user_id, username, first_name, last_name):
-    # Проверяем, есть ли у пользователя уже установленное имя
-    cursor = db.connection.cursor()
-    cursor.execute("SELECT display_name FROM Users WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
+    # Получаем текущую информацию о пользователе
+    current_username, display_name = db.get_user_info(user_id)
     
     # Если пользователь уже существует в базе, не обновляем его имя
-    if result:
+    if display_name:
         # Обновляем только username, если он изменился
-        db.cursor.execute("UPDATE Users SET username = ? WHERE user_id = ?", (username, user_id))
-        db.connection.commit()
+        if current_username != username:
+            db.cursor.execute("UPDATE Users SET username = ? WHERE user_id = ?", (username, user_id))
+            db.connection.commit()
     else:
         # Если пользователя нет в базе, добавляем его с именем из Telegram
         display_name = first_name

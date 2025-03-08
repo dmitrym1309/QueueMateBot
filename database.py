@@ -11,44 +11,45 @@ db_lock = threading.Lock()
 
 def init_database():
     """Инициализация базы данных и создание необходимых таблиц"""
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS Chats (
-        chat_id INTEGER PRIMARY KEY,
-        chat_name TEXT)'''
-    )
+    with db_lock:
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Chats (
+            chat_id INTEGER PRIMARY KEY,
+            chat_name TEXT)'''
+        )
 
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS Users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        display_name TEXT
-    )
-    ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            display_name TEXT
+        )
+        ''')
 
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS Queues (
-        queue_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        queue_name TEXT,
-        chat_id INTEGER,
-        creator_id INTEGER,
-        FOREIGN KEY (chat_id) REFERENCES Chats(chat_id),
-        FOREIGN KEY (creator_id) REFERENCES Users(user_id),
-        UNIQUE (queue_name, chat_id)  -- Очередь с таким именем может быть только одна в каждой беседе
-    )
-    ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Queues (
+            queue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            queue_name TEXT,
+            chat_id INTEGER,
+            creator_id INTEGER,
+            FOREIGN KEY (chat_id) REFERENCES Chats(chat_id),
+            FOREIGN KEY (creator_id) REFERENCES Users(user_id),
+            UNIQUE (queue_name, chat_id)  -- Очередь с таким именем может быть только одна в каждой беседе
+        )
+        ''')
 
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS QueueMembers (
-        queue_id INTEGER,
-        user_id INTEGER,
-        join_order INTEGER,
-        PRIMARY KEY (queue_id, user_id),
-        FOREIGN KEY (queue_id) REFERENCES Queues(queue_id),
-        FOREIGN KEY (user_id) REFERENCES Users(user_id)
-    )
-    ''')
-    
-    connection.commit()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS QueueMembers (
+            queue_id INTEGER,
+            user_id INTEGER,
+            join_order INTEGER,
+            PRIMARY KEY (queue_id, user_id),
+            FOREIGN KEY (queue_id) REFERENCES Queues(queue_id),
+            FOREIGN KEY (user_id) REFERENCES Users(user_id)
+        )
+        ''')
+        
+        connection.commit()
 
 def add_or_update_user(user_id, username, display_name):
     """Добавление или обновление информации о пользователе"""
@@ -56,6 +57,13 @@ def add_or_update_user(user_id, username, display_name):
         cursor.execute("INSERT OR REPLACE INTO Users (user_id, username, display_name) VALUES (?, ?, ?)", 
                       (user_id, username, display_name))
         connection.commit()
+
+def get_user_info(user_id):
+    """Получение информации о пользователе"""
+    with db_lock:
+        cursor.execute("SELECT username, display_name FROM Users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        return result if result else (None, None)
 
 def add_chat(chat_id, chat_name):
     """Добавление информации о чате"""
