@@ -1,5 +1,7 @@
 import telebot
 import sqlite3
+import threading
+import time
 from config import BOT_TOKEN, MESSAGES
 import database as db
 import logging
@@ -9,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 # Создаем экземпляр бота
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# Глобальная переменная для контроля работы бота
+bot_running = True
 
 # Функция для обработки ошибок
 def handle_error(message, error, operation):
@@ -29,7 +34,30 @@ def send_help(message):
 # Обработчик упоминаний бота в группе
 @bot.message_handler(func=lambda message: message.text and '@QueueMateBot' in message.text)
 def handle_mention(message):
-    bot.reply_to(message, "Вы упомянули меня! Чем могу помочь?")
+    # Получаем список очередей в текущем чате
+    chat_id = message.chat.id
+    queues = db.get_all_queues(chat_id)
+    
+    # Формируем сообщение с информацией о боте и доступных командах
+    response = "👋 *Привет! Я QueueMateBot - бот для управления очередями.*\n\n"
+    
+    # Добавляем информацию о существующих очередях
+    if queues:
+        response += "*Активные очереди в этом чате:*\n"
+        for name, count in queues:
+            response += f"📋 {name} - {count} участник(ов)\n"
+        response += "\n"
+    else:
+        response += "*В этом чате пока нет очередей.*\n\n"
+    
+    # Добавляем краткую справку по основным командам
+    response += "*Основные команды:*\n"
+    response += "`/view` - список всех очередей\n"
+    response += "`/join [название]` - присоединиться к очереди\n"
+    response += "`/exit [название]` - выйти из очереди\n"
+    response += "`/help` - полный список команд\n"
+    
+    bot.reply_to(message, response, parse_mode="Markdown")
 
 # Обработчик команды /create
 @bot.message_handler(commands=['create'])
@@ -345,6 +373,67 @@ def update_user_info(user_id, username, first_name, last_name):
             display_name += " " + last_name
         db.add_or_update_user(user_id, username, display_name)
 
+# Функция для остановки бота
+def stop_bot():
+    global bot_running
+    logger.info("===== Остановка бота QueueMateBot =====")
+    bot_running = False
+    # Останавливаем поллинг бота
+    bot.stop_polling()
+    logger.info("Бот остановлен")
+    logger.info("=======================================")
+
+# Функция для чтения команд из консоли
+def console_listener():
+    global bot_running
+    logger.info("Консольный интерфейс запущен. Доступные команды: stop, exit, quit, status")
+    
+    while bot_running:
+        try:
+            command = input().strip().lower()
+            
+            if command in ['stop', 'exit', 'quit']:
+                logger.info("Получена команда остановки бота из консоли")
+                stop_bot()
+                break
+            elif command == 'status':
+                logger.info(f"Статус бота: {'работает' if bot_running else 'остановлен'}")
+                print(f"Статус бота: {'работает' if bot_running else 'остановлен'}")
+            elif command == 'help':
+                print("Доступные команды:")
+                print("  stop, exit, quit - остановить бота")
+                print("  status - проверить статус бота")
+                print("  help - показать эту справку")
+            else:
+                print(f"Неизвестная команда: {command}")
+                print("Введите 'help' для получения списка команд")
+        except Exception as e:
+            logger.error(f"Ошибка в консольном интерфейсе: {str(e)}", exc_info=True)
+    
+    logger.info("Консольный интерфейс остановлен")
+
 # Функция для запуска бота
 def start_bot():
-    bot.polling() 
+    global bot_running
+    bot_running = True
+    
+    logger.info("===== Бот QueueMateBot запущен =====")
+    logger.info(f"Имя бота: {bot.get_me().first_name}")
+    logger.info(f"Username бота: @{bot.get_me().username}")
+    logger.info(f"ID бота: {bot.get_me().id}")
+    logger.info("====================================")
+    
+    # Запускаем поток для чтения команд из консоли
+    console_thread = threading.Thread(target=console_listener, daemon=True)
+    console_thread.start()
+    
+    try:
+        # Запускаем бота
+        bot.polling(none_stop=True, interval=1)
+    except Exception as e:
+        logger.error(f"Ошибка при работе бота: {str(e)}", exc_info=True)
+    finally:
+        bot_running = False
+        logger.info("Бот завершил работу")
+    
+    return bot 
