@@ -5,6 +5,7 @@ import time
 from config import BOT_TOKEN, MESSAGES
 import database as db
 import logging
+import os
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -110,26 +111,39 @@ def format_queue_info(queue_name, queue_id):
     if not queue_members:
         return f"Очередь '*{queue_name}*' пуста.\nСоздатель: _{creator_name}_"
     
-    # Ограничиваем количество участников для отображения, чтобы избежать MESSAGE_TOO_LONG
+    # Ограничиваем количество участников для отображения
     max_members_to_show = 50
     total_members = len(queue_members)
     
     if total_members > max_members_to_show:
         queue_members = queue_members[:max_members_to_show]
-        
-    # Формируем сообщение со списком участников без моноширинного шрифта для чисел
-    queue_list = "\n".join([
-        f"{order}. {name} (@{username})" if username else f"{order}. {name}"
-        for name, username, order, _ in queue_members
-    ])
     
-    result = f"Очередь '*{queue_name}*'\nСоздатель: _{creator_name}_\nКоличество участников: {total_members}"
+    # Экранируем специальные символы в именах пользователей
+    queue_list = []
+    for name, username, order, _ in queue_members:
+        # Экранируем специальные символы в имени
+        safe_name = name.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`').replace('[', '\\[')
+        
+        if username:
+            # Экранируем специальные символы в username
+            safe_username = username.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`').replace('[', '\\[')
+            queue_list.append(f"{order}. {safe_name} (@{safe_username})")
+        else:
+            queue_list.append(f"{order}. {safe_name}")
+    
+    # Соединяем список в строку
+    queue_list_text = "\n".join(queue_list)
+    
+    # Экранируем специальные символы в имени создателя
+    safe_creator_name = creator_name.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`').replace('[', '\\[')
+    
+    result = f"Очередь '*{queue_name}*'\nСоздатель: _{safe_creator_name}_\nКоличество участников: {total_members}"
     
     if total_members > max_members_to_show:
-        result += f"\n\nПоказаны первые {max_members_to_show} из {total_members} участников:\n\n{queue_list}"
+        result += f"\n\nПоказаны первые {max_members_to_show} из {total_members} участников:\n\n{queue_list_text}"
     else:
-        result += f"\n\n{queue_list}"
-        
+        result += f"\n\n{queue_list_text}"
+    
     return result
 
 # Функция для создания клавиатуры с кнопками для управления очередью
@@ -407,13 +421,40 @@ def format_queue_info(queue_name, queue_id):
     if not queue_members:
         return f"Очередь '*{queue_name}*' пуста.\nСоздатель: _{creator_name}_"
     
-    # Формируем сообщение со списком участников с использованием list comprehension
-    queue_list = "\n".join(
-        f"{order}. {name}" + (f" (@{username})" if username else "")
-        for name, username, order, _ in queue_members
-    )
+    # Ограничиваем количество участников для отображения
+    max_members_to_show = 50
+    total_members = len(queue_members)
     
-    return f"Очередь '*{queue_name}*'\nСоздатель: _{creator_name}_\nКоличество участников: {len(queue_members)}\n\n{queue_list}"
+    if total_members > max_members_to_show:
+        queue_members = queue_members[:max_members_to_show]
+    
+    # Экранируем специальные символы в именах пользователей
+    queue_list = []
+    for name, username, order, _ in queue_members:
+        # Экранируем специальные символы в имени
+        safe_name = name.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`').replace('[', '\\[')
+        
+        if username:
+            # Экранируем специальные символы в username
+            safe_username = username.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`').replace('[', '\\[')
+            queue_list.append(f"{order}. {safe_name} (@{safe_username})")
+        else:
+            queue_list.append(f"{order}. {safe_name}")
+    
+    # Соединяем список в строку
+    queue_list_text = "\n".join(queue_list)
+    
+    # Экранируем специальные символы в имени создателя
+    safe_creator_name = creator_name.replace('*', '\\*').replace('_', '\\_').replace('`', '\\`').replace('[', '\\[')
+    
+    result = f"Очередь '*{queue_name}*'\nСоздатель: _{safe_creator_name}_\nКоличество участников: {total_members}"
+    
+    if total_members > max_members_to_show:
+        result += f"\n\nПоказаны первые {max_members_to_show} из {total_members} участников:\n\n{queue_list_text}"
+    else:
+        result += f"\n\n{queue_list_text}"
+    
+    return result
 
 # Вспомогательная функция для обновления информации о пользователе
 def update_user_info(user_id, username, first_name, last_name):
@@ -448,6 +489,17 @@ def console_listener():
     global bot_running
     logger.info("Console interface started. Available commands: stop, exit, quit, status")
     
+    # Проверяем, запущен ли бот через systemd
+    is_systemd = os.environ.get('INVOCATION_ID') is not None or os.environ.get('JOURNAL_STREAM') is not None
+    
+    if is_systemd:
+        logger.info("Running under systemd, console input disabled")
+        # В режиме systemd просто ждем, пока бот не будет остановлен
+        while bot_running:
+            time.sleep(1)
+        return
+    
+    # Обычный режим с чтением команд из консоли
     while bot_running:
         try:
             command = input().strip().lower()
@@ -467,10 +519,15 @@ def console_listener():
             else:
                 print(f"Unknown command: {command}")
                 print("Type 'help' to see available commands")
+        except EOFError:
+            # Обработка ситуации, когда стандартный ввод недоступен
+            logger.warning("Standard input not available, console interface disabled")
+            break
         except Exception as e:
             logger.error(f"Error in console interface: {str(e)}", exc_info=True)
     
     logger.info("Console interface stopped")
+
 # Обработчик нажатий на инлайн-кнопки
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
