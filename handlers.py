@@ -2,14 +2,16 @@ import telebot
 import sqlite3
 import threading
 import time
+import os
+import functools
+import collections
 from config import BOT_TOKEN, MESSAGES
 import database as db
 import logging
-import os
+from telebot import types  # Добавляем импорт для работы с кнопками
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
-from telebot import types  # Добавляем импорт для работы с кнопками
 
 # Создаем экземпляр бота
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -17,24 +19,197 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Глобальная переменная для контроля работы бота
 bot_running = True
 
+# Системы защиты от спама и флуда
+
+# Словари для отслеживания использования команд
+command_usage = {}  # Для индивидуальных пользователей
+chat_command_usage = {}  # Для групповых чатов
+join_queue_usage = {}  # Специально для команды присоединения к очереди
+
+# Настройки ограничений
+RATE_LIMITS = {
+    'default': {'count': 5, 'period': 60},  # 5 команд в минуту для обычных команд
+    'join': {'count': 30, 'period': 60},    # 30 присоединений к очереди в минуту
+    'chat': {'count': 30, 'period': 60}     # 30 команд в минуту для всего чата
+}
+
+def check_rate_limit(user_id, command_type='default', chat_id=None):
+    """
+    Проверяет, не превышен ли лимит использования команд.
+    
+    Args:
+        user_id: ID пользователя
+        command_type: Тип команды ('default', 'join', 'chat')
+        chat_id: ID чата (для групповых ограничений)
+        
+    Returns:
+        tuple: (is_limited, wait_time) - превышен ли лимит и время ожидания
+    """
+    current_time = time.time()
+    
+    # Выбираем соответствующий словарь и настройки в зависимости от типа команды
+    if command_type == 'join':
+        usage_dict = join_queue_usage
+        limit_settings = RATE_LIMITS['join']
+    elif command_type == 'chat' and chat_id:
+        usage_dict = chat_command_usage
+        limit_settings = RATE_LIMITS['chat']
+        key = str(chat_id)
+    else:
+        usage_dict = command_usage
+        limit_settings = RATE_LIMITS['default']
+        key = str(user_id)
+    
+    # Для индивидуальных ограничений используем ID пользователя
+    if command_type != 'chat':
+        key = str(user_id)
+    
+    # Инициализируем очередь временных меток, если её еще нет
+    if key not in usage_dict:
+        usage_dict[key] = collections.deque()
+    
+    # Удаляем устаревшие временные метки
+    while usage_dict[key] and current_time - usage_dict[key][0] > limit_settings['period']:
+        usage_dict[key].popleft()
+    
+    # Проверяем, не превышен ли лимит
+    if len(usage_dict[key]) >= limit_settings['count']:
+        # Вычисляем, сколько нужно подождать до освобождения слота
+        wait_time = int(usage_dict[key][0] + limit_settings['period'] - current_time) + 1
+        return True, wait_time
+    
+    # Добавляем текущую временную метку
+    usage_dict[key].append(current_time)
+    return False, 0
+
+def rate_limit_decorator(command_type='default'):
+    """
+    Декоратор для ограничения частоты использования команд.
+    
+    Args:
+        command_type: Тип команды ('default', 'join', 'chat')
+        
+    Returns:
+        Декоратор функции
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(message, *args, **kwargs):
+            user_id = message.from_user.id
+            chat_id = message.chat.id
+            
+            # Проверяем индивидуальное ограничение
+            is_limited, wait_time = check_rate_limit(user_id, command_type)
+            
+            if is_limited:
+                logger.warning(f"Rate limit exceeded for user {user_id}, command type {command_type}")
+                try:
+                    safe_reply_to(message, f"Пожалуйста, не отправляйте команды слишком часто. Попробуйте снова через {wait_time} сек.")
+                except Exception as e:
+                    logger.error(f"Failed to send rate limit message: {str(e)}")
+                return
+            
+            # Для групповых чатов проверяем также общее ограничение чата
+            if message.chat.type in ['group', 'supergroup']:
+                is_chat_limited, chat_wait_time = check_rate_limit(None, 'chat', chat_id)
+                
+                if is_chat_limited:
+                    logger.warning(f"Chat rate limit exceeded for chat {chat_id}")
+                    # Для чата не отправляем сообщение, чтобы не спамить
+                    return
+            
+            # Если лимиты не превышены, выполняем функцию
+            return func(message, *args, **kwargs)
+        return wrapper
+    return decorator
+
+# Декоратор для повторных попыток при ошибке превышения лимита запросов
+def retry_on_rate_limit(max_retries=3, initial_delay=1):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            delay = initial_delay
+            
+            while retries <= max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except telebot.apihelper.ApiTelegramException as e:
+                    if "Too Many Requests" in str(e) or e.error_code == 429:
+                        retry_after = delay
+                        
+                        # Пытаемся получить время ожидания из ответа
+                        if hasattr(e, 'result') and isinstance(e.result, dict):
+                            if 'parameters' in e.result and 'retry_after' in e.result['parameters']:
+                                retry_after = e.result['parameters']['retry_after']
+                        
+                        if retries < max_retries:
+                            logger.warning(f"Rate limit exceeded. Retry {retries+1}/{max_retries} after {retry_after} seconds")
+                            time.sleep(retry_after)
+                            retries += 1
+                            delay *= 2  # Экспоненциальное увеличение задержки
+                        else:
+                            logger.error(f"Max retries exceeded for rate limit. Giving up.")
+                            raise
+                    else:
+                        # Другие ошибки API пробрасываем дальше
+                        raise
+        return wrapper
+    return decorator
+
+# Безопасные функции для работы с API Telegram
+@retry_on_rate_limit()
+def safe_send_message(chat_id, text, **kwargs):
+    return bot.send_message(chat_id, text, **kwargs)
+
+@retry_on_rate_limit()
+def safe_edit_message_text(chat_id, message_id, text, **kwargs):
+    return bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, **kwargs)
+
+@retry_on_rate_limit()
+def safe_answer_callback_query(callback_query_id, text, **kwargs):
+    return bot.answer_callback_query(callback_query_id, text, **kwargs)
+
+@retry_on_rate_limit()
+def safe_reply_to(message, text, **kwargs):
+    return bot.reply_to(message, text, **kwargs)
+
 # Функция для обработки ошибок
 def handle_error(message, error, operation):
     error_text = str(error)
     logger.error(f"Error during {operation}: {error_text}", exc_info=True)
-    bot.reply_to(message, f"Произошла ошибка при {operation}: {error_text}")
+    try:
+        safe_reply_to(message, f"Произошла ошибка при {operation}: {error_text}")
+    except Exception as e:
+        logger.error(f"Failed to send error message: {str(e)}")
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
+@rate_limit_decorator('default')
 def send_welcome(message):
-    bot.reply_to(message, MESSAGES['welcome'], parse_mode="Markdown")
+    try:
+        # Добавляем пользователя в базу данных
+        user_id = message.from_user.id
+        username = message.from_user.username or ""
+        update_user_info(user_id, username, message.from_user.first_name, message.from_user.last_name)
+        
+        # Отправляем приветственное сообщение
+        safe_reply_to(message, MESSAGES['welcome'], parse_mode="Markdown")
+    except Exception as e:
+        handle_error(message, e, "отправке приветствия")
     
 # Обработчик команды /help
 @bot.message_handler(commands=['help'])
+@rate_limit_decorator('default')
 def send_help(message):
-    bot.reply_to(message, MESSAGES['help'], parse_mode="Markdown")
+    try:
+        safe_reply_to(message, MESSAGES['help'], parse_mode="Markdown")
+    except Exception as e:
+        handle_error(message, e, "отправке справки")
     
 # Обработчик упоминаний бота в группе
 @bot.message_handler(func=lambda message: message.text and '@QueueMateBot' in message.text)
+@rate_limit_decorator('default')
 def handle_mention(message):
     # Получаем список очередей в текущем чате
     chat_id = message.chat.id
@@ -63,6 +238,7 @@ def handle_mention(message):
 
 # Обработчик команды /create
 @bot.message_handler(commands=['create'])
+@rate_limit_decorator('default')
 def create_queue(message):
     try:
         # Получаем текст после команды /create
@@ -162,6 +338,7 @@ def create_queue_keyboard(queue_name):
 
 # Обработчик команды /join
 @bot.message_handler(commands=['join'])
+@rate_limit_decorator('join')
 def join_queue(message):
     try:
         # Получаем текст после команды /join
@@ -207,6 +384,7 @@ def join_queue(message):
 
 # Обработчик команды /exit
 @bot.message_handler(commands=['exit'])
+@rate_limit_decorator('default')
 def exit_queue(message):
     try:
         # Получаем текст после команды /exit
@@ -255,6 +433,7 @@ def exit_queue(message):
 
 # Обработчик команды /rejoin
 @bot.message_handler(commands=['rejoin'])
+@rate_limit_decorator('default')
 def rejoin_queue(message):
     try:
         # Получаем текст после команды /rejoin
@@ -297,6 +476,7 @@ def rejoin_queue(message):
 
 # Обработчик команды /delete
 @bot.message_handler(commands=['delete'])
+@rate_limit_decorator('default')
 def delete_queue(message):
     try:
         # Получаем текст после команды /delete
@@ -336,6 +516,7 @@ def delete_queue(message):
 
 # Обработчик команды /view
 @bot.message_handler(commands=['view'])
+@rate_limit_decorator('default')
 def view_queue(message):
     try:
         chat_id = message.chat.id
@@ -379,6 +560,7 @@ def view_queue(message):
 
 # Обработчик команды /setname
 @bot.message_handler(commands=['setname'])
+@rate_limit_decorator('default')
 def set_custom_name(message):
     try:
         # Получаем текст после команды /setname
@@ -532,84 +714,143 @@ def console_listener():
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
     try:
-        # Получаем данные из callback_data
-        data = call.data.split('_', 1)
-        action = data[0]
-        queue_name = data[1]
-        
+        # Получаем данные из callback
+        data = call.data
         chat_id = call.message.chat.id
         user_id = call.from_user.id
         
-        # Добавляем пользователя в базу данных
-        user_name = call.from_user.username or ""
-        update_user_info(user_id, user_name, call.from_user.first_name, call.from_user.last_name)
+        # Проверяем ограничение для callback-запросов
+        # Для присоединения к очереди используем специальный тип ограничения
+        if data.startswith('join_'):
+            is_limited, wait_time = check_rate_limit(user_id, 'join')
+        else:
+            is_limited, wait_time = check_rate_limit(user_id, 'default')
         
-        # Проверяем существование очереди
-        queue_id = db.get_queue_id(queue_name, chat_id)
-        if not queue_id:
-            bot.answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена в этом чате.")
+        if is_limited:
+            logger.warning(f"Rate limit exceeded for user {user_id} in callback query")
+            try:
+                safe_answer_callback_query(call.id, f"Пожалуйста, не нажимайте кнопки слишком часто. Подождите {wait_time} сек.")
+            except Exception as e:
+                logger.error(f"Failed to send rate limit message via callback: {str(e)}")
             return
         
-        # Обрабатываем действие в зависимости от нажатой кнопки
-        if action == "join":
-            # Проверяем, не состоит ли пользователь уже в этой очереди
+        # Обновляем информацию о пользователе
+        update_user_info(user_id, call.from_user.username, call.from_user.first_name, call.from_user.last_name)
+        
+        # Обрабатываем callback для присоединения к очереди
+        if data.startswith('join_'):
+            queue_name = data[5:]  # Получаем название очереди
+            
+            # Получаем ID очереди
+            queue_id = db.get_queue_id(queue_name, chat_id)
+            if not queue_id:
+                try:
+                    safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
+                    return
+                except Exception as e:
+                    logger.error(f"Error answering callback query: {str(e)}")
+                    return
+            
+            # Проверяем, состоит ли пользователь уже в очереди
             if db.check_user_in_queue(queue_id, user_id):
-                bot.answer_callback_query(call.id, f"Вы уже состоите в очереди '{queue_name}'.")
-                return
+                try:
+                    safe_answer_callback_query(call.id, f"Вы уже состоите в очереди '{queue_name}'.")
+                    return
+                except Exception as e:
+                    logger.error(f"Error answering callback query: {str(e)}")
+                    return
             
             # Добавляем пользователя в очередь
-            db.add_user_to_queue(queue_id, user_id)
-            bot.answer_callback_query(call.id, f"Вы успешно присоединились к очереди '{queue_name}'!")
-            
-        elif action == "exit":
-            # Проверяем, состоит ли пользователь в этой очереди
-            user_order = db.check_user_in_queue(queue_id, user_id)
-            if not user_order:
-                bot.answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
+            try:
+                db.add_user_to_queue(queue_id, user_id)
+                safe_answer_callback_query(call.id, f"Вы присоединились к очереди '{queue_name}'.")
+            except Exception as e:
+                logger.error(f"Error adding user to queue: {str(e)}")
+                try:
+                    safe_answer_callback_query(call.id, f"Ошибка при присоединении к очереди: {str(e)}")
+                except Exception:
+                    logger.error("Failed to send error message via callback")
                 return
             
-            # Удаляем пользователя из очереди
-            db.remove_user_from_queue(queue_id, user_id, user_order)
-            bot.answer_callback_query(call.id, f"Вы успешно вышли из очереди '{queue_name}'.")
+            # Обновляем сообщение с очередью
+            queue_info = format_queue_info(queue_name, queue_id)
+            keyboard = create_queue_keyboard(queue_name)
             
-        elif action == "rejoin":
-            # Проверяем, состоит ли пользователь в этой очереди
-            user_order = db.check_user_in_queue(queue_id, user_id)
-            if not user_order:
-                bot.answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'. Сначала присоединитесь.")
-                return
-            
-            # Перемещаем пользователя в конец очереди
-            db.rejoin_queue(queue_id, user_id)
-            bot.answer_callback_query(call.id, f"Вы успешно переместились в конец очереди '{queue_name}'.")
-        
-        # Обновляем сообщение с очередью
-        queue_info = format_queue_info(queue_name, queue_id)
-        keyboard = create_queue_keyboard(queue_name)
-        
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                text=queue_info,
-                parse_mode="Markdown",
-                reply_markup=keyboard
-            )
-        except telebot.apihelper.ApiTelegramException as api_error:
-            # Игнорируем ошибку "message is not modified"
-            if "message is not modified" in str(api_error):
-                pass
-            # Если сообщение слишком длинное, отправляем новое сообщение
-            elif "MESSAGE_TOO_LONG" in str(api_error):
-                bot.send_message(
+            try:
+                safe_edit_message_text(
                     chat_id=chat_id,
-                    text="Очередь слишком большая для отображения. Используйте команду /view для просмотра.",
+                    message_id=call.message.message_id,
+                    text=queue_info,
+                    parse_mode="Markdown",
                     reply_markup=keyboard
                 )
-            else:
-                # Для других ошибок API отправляем короткое уведомление
-                bot.answer_callback_query(call.id, "Не удалось обновить сообщение. Попробуйте еще раз.")
-                
+            except telebot.apihelper.ApiTelegramException as api_error:
+                # Игнорируем ошибку "message is not modified"
+                if "message is not modified" in str(api_error):
+                    pass
+                else:
+                    logger.error(f"Error updating message: {str(api_error)}")
+        
+        # Обрабатываем callback для выхода из очереди
+        elif data.startswith('exit_'):
+            queue_name = data[5:]  # Получаем название очереди
+            
+            # Получаем ID очереди
+            queue_id = db.get_queue_id(queue_name, chat_id)
+            if not queue_id:
+                try:
+                    safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
+                    return
+                except Exception as e:
+                    logger.error(f"Error answering callback query: {str(e)}")
+                    return
+            
+            # Проверяем, состоит ли пользователь в очереди
+            user_order = None
+            for _, _, order, uid in db.get_queue_members(queue_id):
+                if uid == user_id:
+                    user_order = order
+                    break
+            
+            if not user_order:
+                try:
+                    safe_answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
+                    return
+                except Exception as e:
+                    logger.error(f"Error answering callback query: {str(e)}")
+                    return
+            
+            # Удаляем пользователя из очереди
+            try:
+                db.remove_user_from_queue(queue_id, user_id, user_order)
+                safe_answer_callback_query(call.id, f"Вы вышли из очереди '{queue_name}'.")
+            except Exception as e:
+                logger.error(f"Error removing user from queue: {str(e)}")
+                try:
+                    safe_answer_callback_query(call.id, f"Ошибка при выходе из очереди: {str(e)}")
+                except Exception:
+                    logger.error("Failed to send error message via callback")
+                return
+            
+            # Обновляем сообщение с очередью
+            queue_info = format_queue_info(queue_name, queue_id)
+            keyboard = create_queue_keyboard(queue_name)
+            
+            try:
+                safe_edit_message_text(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    text=queue_info,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+            except telebot.apihelper.ApiTelegramException as api_error:
+                # Игнорируем ошибку "message is not modified"
+                if "message is not modified" in str(api_error):
+                    pass
+                else:
+                    logger.error(f"Error updating message: {str(api_error)}")
+    
     except Exception as e:
         # Сокращаем текст ошибки, чтобы избежать MESSAGE_TOO_LONG
         error_msg = str(e)
@@ -617,12 +858,48 @@ def handle_callback_query(call):
             error_msg = error_msg[:47] + "..."
             
         try:
-            bot.answer_callback_query(call.id, f"Ошибка: {error_msg}")
-        except:
-            # Если даже это не работает, просто логируем ошибку
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"Ошибка в обработчике callback: {error_details}")
+            safe_answer_callback_query(call.id, f"Ошибка: {error_msg}")
+        except Exception as callback_error:
+            logger.error(f"Error answering callback query about error: {str(callback_error)}")
+
+# Функция для периодической очистки словарей использования команд
+def cleanup_command_usage():
+    """
+    Периодически очищает словари использования команд от устаревших записей.
+    """
+    while bot_running:
+        try:
+            current_time = time.time()
+            
+            # Очищаем словарь обычных команд
+            for user_id in list(command_usage.keys()):
+                while command_usage[user_id] and current_time - command_usage[user_id][0] > RATE_LIMITS['default']['period']:
+                    command_usage[user_id].popleft()
+                if not command_usage[user_id]:
+                    del command_usage[user_id]
+            
+            # Очищаем словарь присоединений к очереди
+            for user_id in list(join_queue_usage.keys()):
+                while join_queue_usage[user_id] and current_time - join_queue_usage[user_id][0] > RATE_LIMITS['join']['period']:
+                    join_queue_usage[user_id].popleft()
+                if not join_queue_usage[user_id]:
+                    del join_queue_usage[user_id]
+            
+            # Очищаем словарь групповых чатов
+            for chat_id in list(chat_command_usage.keys()):
+                while chat_command_usage[chat_id] and current_time - chat_command_usage[chat_id][0] > RATE_LIMITS['chat']['period']:
+                    chat_command_usage[chat_id].popleft()
+                if not chat_command_usage[chat_id]:
+                    del chat_command_usage[chat_id]
+            
+            # Логируем статистику использования
+            logger.debug(f"Command usage stats: users={len(command_usage)}, joins={len(join_queue_usage)}, chats={len(chat_command_usage)}")
+            
+        except Exception as e:
+            logger.error(f"Error in cleanup_command_usage: {str(e)}")
+        
+        # Запускаем очистку каждые 5 минут
+        time.sleep(300)
 
 # Функция для запуска бота
 def start_bot():
@@ -635,23 +912,36 @@ def start_bot():
     logger.info(f"Bot ID: {bot.get_me().id}")
     logger.info("====================================")
     
-    # Запускаем поток для чтения команд из консоли
-    console_thread = threading.Thread(target=console_listener, daemon=True)
-    console_thread.start()
+    # Проверяем, запущен ли бот через systemd
+    is_systemd = os.environ.get('INVOCATION_ID') is not None or os.environ.get('JOURNAL_STREAM') is not None
+    
+    # Запускаем поток для чтения команд из консоли, если не запущен через systemd
+    if not is_systemd:
+        console_thread = threading.Thread(target=console_listener, daemon=True)
+        console_thread.start()
+        logger.info("Console interface started")
+    else:
+        logger.info("Running under systemd, console interface disabled")
+    
+    # Запускаем поток для очистки словарей использования команд
+    cleanup_thread = threading.Thread(target=cleanup_command_usage, daemon=True)
+    cleanup_thread.start()
+    logger.info("Command usage cleanup thread started")
     
     try:
-        # Запускаем бота
-        bot.polling(none_stop=True, interval=1)
+        # Запускаем бота с увеличенным интервалом между запросами
+        bot.polling(none_stop=True, interval=3, timeout=30)
     except Exception as e:
         logger.error(f"Error during bot operation: {str(e)}", exc_info=True)
     finally:
         bot_running = False
         logger.info("Bot has finished working")
     
-    return bot 
+    return bot
 
 # Обработчик команды /remove - удаление пользователя из очереди администратором
 @bot.message_handler(commands=['remove'])
+@rate_limit_decorator('default')
 def remove_user_admin(message):
     try:
         # Получаем текст после команды /remove
@@ -727,6 +1017,7 @@ def remove_user_admin(message):
 
 # Обработчик команды /setposition - установка позиции участника в очереди
 @bot.message_handler(commands=['setposition'])
+@rate_limit_decorator('default')
 def set_user_position(message):
     try:
         # Получаем текст после команды /setposition
