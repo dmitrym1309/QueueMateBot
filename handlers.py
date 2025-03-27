@@ -8,7 +8,6 @@ import collections
 from config import BOT_TOKEN, MESSAGES
 import database as db
 import logging
-from telebot import types  # Добавляем импорт для работы с кнопками
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -324,15 +323,18 @@ def format_queue_info(queue_name, queue_id):
 
 # Функция для создания клавиатуры с кнопками для управления очередью
 def create_queue_keyboard(queue_name):
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    join_button = types.InlineKeyboardButton("Присоединиться", callback_data=f"join_{queue_name}")
-    exit_button = types.InlineKeyboardButton("Выйти", callback_data=f"exit_{queue_name}")
-    rejoin_button = types.InlineKeyboardButton("В конец", callback_data=f"rejoin_{queue_name}")
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+    join_button = telebot.types.InlineKeyboardButton("Присоединиться", callback_data=f"join_{queue_name}")
+    exit_button = telebot.types.InlineKeyboardButton("Выйти", callback_data=f"exit_{queue_name}")
+    rejoin_button = telebot.types.InlineKeyboardButton("В конец", callback_data=f"rejoin_{queue_name}")
+    skip_button = telebot.types.InlineKeyboardButton("Пропустить", callback_data=f"skip_{queue_name}")
     
     # Размещаем кнопку "Присоединиться" в первом ряду
     keyboard.row(join_button)
-    # Размещаем кнопки "Выйти" и "В конец" во втором ряду
-    keyboard.row(exit_button, rejoin_button)
+    # Размещаем кнопку "В конец" во втором ряду
+    keyboard.row(rejoin_button)
+    # Размещаем кнопки "Пропустить" и "Выйти" в третьем ряду
+    keyboard.row(skip_button, exit_button)
     
     return keyboard
 
@@ -744,33 +746,17 @@ def handle_callback_query(call):
             # Получаем ID очереди
             queue_id = db.get_queue_id(queue_name, chat_id)
             if not queue_id:
-                try:
-                    safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
-                    return
-                except Exception as e:
-                    logger.error(f"Error answering callback query: {str(e)}")
-                    return
+                safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
+                return
             
-            # Проверяем, состоит ли пользователь уже в очереди
+            # Проверяем, состоит ли пользователь в очереди
             if db.check_user_in_queue(queue_id, user_id):
-                try:
-                    safe_answer_callback_query(call.id, f"Вы уже состоите в очереди '{queue_name}'.")
-                    return
-                except Exception as e:
-                    logger.error(f"Error answering callback query: {str(e)}")
-                    return
+                safe_answer_callback_query(call.id, f"Вы уже состоите в очереди '{queue_name}'.")
+                return
             
             # Добавляем пользователя в очередь
-            try:
-                db.add_user_to_queue(queue_id, user_id)
-                safe_answer_callback_query(call.id, f"Вы присоединились к очереди '{queue_name}'.")
-            except Exception as e:
-                logger.error(f"Error adding user to queue: {str(e)}")
-                try:
-                    safe_answer_callback_query(call.id, f"Ошибка при присоединении к очереди: {str(e)}")
-                except Exception:
-                    logger.error("Failed to send error message via callback")
-                return
+            db.add_user_to_queue(queue_id, user_id)
+            safe_answer_callback_query(call.id, f"Вы присоединились к очереди '{queue_name}'.")
             
             # Обновляем сообщение с очередью
             queue_info = format_queue_info(queue_name, queue_id)
@@ -798,39 +784,120 @@ def handle_callback_query(call):
             # Получаем ID очереди
             queue_id = db.get_queue_id(queue_name, chat_id)
             if not queue_id:
-                try:
-                    safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
-                    return
-                except Exception as e:
-                    logger.error(f"Error answering callback query: {str(e)}")
-                    return
+                safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
+                return
             
             # Проверяем, состоит ли пользователь в очереди
-            user_order = None
-            for _, _, order, uid in db.get_queue_members(queue_id):
-                if uid == user_id:
-                    user_order = order
-                    break
-            
+            user_order = db.check_user_in_queue(queue_id, user_id)
             if not user_order:
-                try:
-                    safe_answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
-                    return
-                except Exception as e:
-                    logger.error(f"Error answering callback query: {str(e)}")
-                    return
+                safe_answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
+                return
             
             # Удаляем пользователя из очереди
+            db.remove_user_from_queue(queue_id, user_id, user_order)
+            safe_answer_callback_query(call.id, f"Вы вышли из очереди '{queue_name}'.")
+            
+            # Обновляем сообщение с очередью
+            queue_info = format_queue_info(queue_name, queue_id)
+            keyboard = create_queue_keyboard(queue_name)
+            
             try:
-                db.remove_user_from_queue(queue_id, user_id, user_order)
-                safe_answer_callback_query(call.id, f"Вы вышли из очереди '{queue_name}'.")
-            except Exception as e:
-                logger.error(f"Error removing user from queue: {str(e)}")
-                try:
-                    safe_answer_callback_query(call.id, f"Ошибка при выходе из очереди: {str(e)}")
-                except Exception:
-                    logger.error("Failed to send error message via callback")
+                safe_edit_message_text(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    text=queue_info,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+            except telebot.apihelper.ApiTelegramException as api_error:
+                # Игнорируем ошибку "message is not modified"
+                if "message is not modified" in str(api_error):
+                    pass
+                else:
+                    logger.error(f"Error updating message: {str(api_error)}")
+        
+        # Обрабатываем callback для перемещения в конец очереди
+        elif data.startswith('rejoin_'):
+            queue_name = data[7:]  # Получаем название очереди
+            
+            # Получаем ID очереди
+            queue_id = db.get_queue_id(queue_name, chat_id)
+            if not queue_id:
+                safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
                 return
+            
+            # Проверяем, состоит ли пользователь в очереди
+            user_order = db.check_user_in_queue(queue_id, user_id)
+            if not user_order:
+                safe_answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
+                return
+            
+            # Перемещаем пользователя в конец очереди
+            new_position = db.rejoin_queue(queue_id, user_id)
+            safe_answer_callback_query(call.id, f"Вы переместились в конец очереди '{queue_name}'.")
+            
+            # Обновляем сообщение с очередью
+            queue_info = format_queue_info(queue_name, queue_id)
+            keyboard = create_queue_keyboard(queue_name)
+            
+            try:
+                safe_edit_message_text(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    text=queue_info,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard
+                )
+            except telebot.apihelper.ApiTelegramException as api_error:
+                # Игнорируем ошибку "message is not modified"
+                if "message is not modified" in str(api_error):
+                    pass
+                else:
+                    logger.error(f"Error updating message: {str(api_error)}")
+        
+        # Обрабатываем callback для пропуска позиции
+        elif data.startswith('skip_'):
+            queue_name = data[5:]  # Получаем название очереди
+            
+            # Получаем ID очереди
+            queue_id = db.get_queue_id(queue_name, chat_id)
+            if not queue_id:
+                safe_answer_callback_query(call.id, f"Очередь '{queue_name}' не найдена.")
+                return
+            
+            # Проверяем, состоит ли пользователь в очереди
+            user_order = db.check_user_in_queue(queue_id, user_id)
+            if not user_order:
+                safe_answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
+                return
+            
+            # Получаем количество участников в очереди
+            members_count = db.get_queue_members_count(queue_id)
+            
+            # Проверяем, не последний ли пользователь в очереди
+            if user_order == members_count:
+                safe_answer_callback_query(call.id, f"Вы уже находитесь в конце очереди '{queue_name}'.")
+                return
+            
+            # Перемещаем пользователя на одну позицию назад
+            with db.db_lock:
+                # Обновляем позицию пользователя, который будет перемещен вперед
+                db.cursor.execute("""
+                    UPDATE QueueMembers 
+                    SET join_order = ? 
+                    WHERE queue_id = ? AND join_order = ?
+                """, (user_order, queue_id, user_order + 1))
+                
+                # Обновляем позицию текущего пользователя
+                db.cursor.execute("""
+                    UPDATE QueueMembers 
+                    SET join_order = ? 
+                    WHERE queue_id = ? AND user_id = ?
+                """, (user_order + 1, queue_id, user_id))
+                
+                db.connection.commit()
+            
+            safe_answer_callback_query(call.id, f"Вы пропустили одного человека вперед в очереди '{queue_name}'.")
             
             # Обновляем сообщение с очередью
             queue_info = format_queue_info(queue_name, queue_id)
@@ -1134,4 +1201,70 @@ def set_user_position(message):
         logger.info(f"Admin {admin_id} moved user {user_id} ({user_name}) to position {new_position} in queue '{queue_name}'")
     
     except Exception as e:
-        handle_error(message, e, "изменении позиции пользователя") 
+        handle_error(message, e, "изменении позиции пользователя")
+
+# Обработчик команды /skip
+@bot.message_handler(commands=['skip'])
+@rate_limit_decorator('default')
+def skip_position(message):
+    try:
+        # Получаем текст после команды /skip
+        command_parts = message.text.split(' ', 1)
+        
+        # Проверяем, указано ли название очереди
+        if len(command_parts) < 2:
+            bot.reply_to(message, "Пожалуйста, укажите название очереди. Пример: `/skip Математика`", parse_mode="Markdown")
+            return
+        
+        queue_name = command_parts[1].strip()
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        
+        # Проверяем существование очереди
+        queue_id = db.get_queue_id(queue_name, chat_id)
+        if not queue_id:
+            bot.reply_to(message, f"Очередь '{queue_name}' не найдена в этом чате.")
+            return
+        
+        # Проверяем, состоит ли пользователь в очереди
+        user_order = db.check_user_in_queue(queue_id, user_id)
+        if not user_order:
+            bot.reply_to(message, f"Вы не состоите в очереди '{queue_name}'.")
+            return
+        
+        # Получаем количество участников в очереди
+        members_count = db.get_queue_members_count(queue_id)
+        
+        # Проверяем, не последний ли пользователь в очереди
+        if user_order == members_count:
+            bot.reply_to(message, f"Вы уже находитесь в конце очереди '{queue_name}'.")
+            return
+        
+        # Перемещаем пользователя на одну позицию назад
+        with db.db_lock:
+            # Обновляем позицию пользователя, который будет перемещен вперед
+            db.cursor.execute("""
+                UPDATE QueueMembers 
+                SET join_order = ? 
+                WHERE queue_id = ? AND join_order = ?
+            """, (user_order, queue_id, user_order + 1))
+            
+            # Обновляем позицию текущего пользователя
+            db.cursor.execute("""
+                UPDATE QueueMembers 
+                SET join_order = ? 
+                WHERE queue_id = ? AND user_id = ?
+            """, (user_order + 1, queue_id, user_id))
+            
+            db.connection.commit()
+        
+        # Формируем сообщение с обновленной информацией об очереди
+        queue_info = format_queue_info(queue_name, queue_id)
+        
+        # Создаем клавиатуру с кнопками
+        keyboard = create_queue_keyboard(queue_name)
+        
+        bot.reply_to(message, f"Вы пропустили одного человека вперед в очереди '{queue_name}'.\n\n{queue_info}", parse_mode="Markdown", reply_markup=keyboard)
+    
+    except Exception as e:
+        handle_error(message, e, "пропуске позиции в очереди") 
