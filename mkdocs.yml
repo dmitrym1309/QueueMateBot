@@ -1,0 +1,64 @@
+site_name: QueueMateBot
+site_description: Телеграм-бот для управления очередями в групповых чатах
+site_author: QueueMateBot Team
+site_url: https://github.com/dmitrym1309/QueueMateBot
+
+repo_name: QueueMateBot
+repo_url: https://github.com/dmitrym1309/QueueMateBot
+
+theme:
+  name: material
+  language: ru
+  palette:
+    primary: indigo
+    accent: indigo
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.indexes
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+  - autorefs
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          rendering:
+            show_source: true
+            show_category_heading: true
+            show_root_heading: true
+          selection:
+            inherited_members: true
+
+nav:
+  - Главная: index.md
+  - Установка: installation.md
+  - Руководство пользователя: 
+    - Базовое использование: user-guide/basic-usage.md
+    - Команды пользователей: user-guide/user-commands.md
+    - Команды администратора: user-guide/admin-commands.md
+  - Разработка:
+    - Архитектура: dev/architecture.md
+    - API документация:
+      - main: src/main.md
+      - handlers: src/handlers.md
+      - database: src/database.md
+      - config: src/config.md
+  - Участие в проекте: contributing.md 

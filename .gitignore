@@ -43,3 +43,26 @@ dist/
 # Файлы установки
 .installed.cfg
 develop-eggs/
+
+# MkDocs
+site/
+mkdocs_build/
+
+# Временные файлы OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Кэш и временные файлы
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Дополнительно для MkDocs
+.mkdocs/
+__docscache__/
+.cache/
+mkdocs.local.yml
