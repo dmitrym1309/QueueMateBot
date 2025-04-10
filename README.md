@@ -40,6 +40,30 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Использование setuptools
+
+Проект можно установить с помощью setuptools для более удобного управления:
+
+1. Установка проекта в режиме разработки:
+```
+pip install -e .
+```
+
+2. Создание пакета:
+```
+python setup.py sdist bdist_wheel
+```
+
+3. Установка из созданного пакета:
+```
+pip install dist/QueueMateBot-*.whl
+```
+
+4. После установки бот можно запустить командой:
+```
+queuemate-bot
+```
+
 ## Команды бота
 
 ### Основные команды
