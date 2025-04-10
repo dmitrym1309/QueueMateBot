@@ -18,11 +18,14 @@ logger = logging.getLogger(__name__)
 # Регистрируем функцию закрытия соединения с базой данных при завершении работы
 atexit.register(close_connection)
 
-if __name__ == "__main__":
+def start_bot_wrapper():
     try:
         logger.info("Initializing database...")
         init_database()
         logger.info("Starting bot...")
         start_bot()
     except Exception as e:
-        logger.error(f"Error starting bot: {str(e)}", exc_info=True) 
+        logger.error(f"Error starting bot: {str(e)}", exc_info=True)
+
+if __name__ == "__main__":
+    start_bot_wrapper() 

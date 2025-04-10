@@ -29,3 +29,17 @@ ENV/
 
 # Игнорировать файлы конфигурации с секретами
 .env
+
+# Файлы setuptools/packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Файл с токеном бота должен быть только локальным
+.env.example
+
+# Файлы установки
+.installed.cfg
+develop-eggs/
