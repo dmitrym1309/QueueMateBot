@@ -578,7 +578,7 @@ def set_custom_name(message):
                 telegram_name += " " + message.from_user.last_name
             
             # Обновляем имя пользователя в базе данных
-            db.update_user_display_name(user_id, telegram_name)
+            db.update_display_name(user_id, telegram_name)
             
             bot.reply_to(message, f"Ваше имя сброшено на стандартное из Telegram: '{telegram_name}'!")
             return
@@ -587,7 +587,7 @@ def set_custom_name(message):
         user_id = message.from_user.id
         
         # Обновляем имя пользователя в базе данных
-        db.update_user_display_name(user_id, new_name)
+        db.update_display_name(user_id, new_name)
         
         bot.reply_to(message, f"Ваше имя успешно изменено на '{new_name}'!")
     
@@ -649,8 +649,7 @@ def update_user_info(user_id, username, first_name, last_name):
     if display_name:
         # Обновляем только username, если он изменился
         if current_username != username:
-            db.cursor.execute("UPDATE Users SET username = ? WHERE user_id = ?", (username, user_id))
-            db.connection.commit()
+            db.update_username(user_id, username)
     else:
         # Если пользователя нет в базе, добавляем его с именем из Telegram
         display_name = first_name
@@ -855,7 +854,7 @@ def handle_callback_query(call):
                 else:
                     logger.error(f"Error updating message: {str(api_error)}")
         
-        # Обрабатываем callback для пропуска позиции
+        # Обрабатываем callback для пропуска позиции в очереди
         elif data.startswith('skip_'):
             queue_name = data[5:]  # Получаем название очереди
             
@@ -871,31 +870,12 @@ def handle_callback_query(call):
                 safe_answer_callback_query(call.id, f"Вы не состоите в очереди '{queue_name}'.")
                 return
             
-            # Получаем количество участников в очереди
-            members_count = db.get_queue_members_count(queue_id)
+            # Перемещаем пользователя на одну позицию назад
+            success = db.skip_position_in_queue(queue_id, user_id)
             
-            # Проверяем, не последний ли пользователь в очереди
-            if user_order == members_count:
+            if not success:
                 safe_answer_callback_query(call.id, f"Вы уже находитесь в конце очереди '{queue_name}'.")
                 return
-            
-            # Перемещаем пользователя на одну позицию назад
-            with db.db_lock:
-                # Обновляем позицию пользователя, который будет перемещен вперед
-                db.cursor.execute("""
-                    UPDATE QueueMembers 
-                    SET join_order = ? 
-                    WHERE queue_id = ? AND join_order = ?
-                """, (user_order, queue_id, user_order + 1))
-                
-                # Обновляем позицию текущего пользователя
-                db.cursor.execute("""
-                    UPDATE QueueMembers 
-                    SET join_order = ? 
-                    WHERE queue_id = ? AND user_id = ?
-                """, (user_order + 1, queue_id, user_id))
-                
-                db.connection.commit()
             
             safe_answer_callback_query(call.id, f"Вы пропустили одного человека вперед в очереди '{queue_name}'.")
             
@@ -1162,37 +1142,16 @@ def set_user_position(message):
             bot.reply_to(message, f"Пользователь '{user_identifier}' не найден в очереди '{queue_name}'.")
             return
         
-        # Если текущая позиция совпадает с новой, ничего не делаем
-        if user_order == new_position:
-            bot.reply_to(message, f"Пользователь '{user_name}' уже находится на позиции {new_position}.")
-            return
-        
         # Изменяем позицию пользователя в очереди
-        with db.db_lock:
-            # Временно удаляем пользователя из очереди
-            db.cursor.execute("DELETE FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
-                            (queue_id, user_id))
-            
-            # Если перемещаем вверх (на меньшую позицию)
-            if new_position < user_order:
-                db.cursor.execute("""
-                    UPDATE QueueMembers 
-                    SET join_order = join_order + 1 
-                    WHERE queue_id = ? AND join_order >= ? AND join_order < ?
-                """, (queue_id, new_position, user_order))
-            # Если перемещаем вниз (на большую позицию)
+        success, old_position = db.set_user_position(queue_id, user_id, new_position)
+        
+        if not success:
+            if old_position == new_position:
+                bot.reply_to(message, f"Пользователь '{user_name}' уже находится на позиции {new_position}.")
+                return
             else:
-                db.cursor.execute("""
-                    UPDATE QueueMembers 
-                    SET join_order = join_order - 1 
-                    WHERE queue_id = ? AND join_order > ? AND join_order <= ?
-                """, (queue_id, user_order, new_position))
-            
-            # Добавляем пользователя на новую позицию
-            db.cursor.execute("INSERT INTO QueueMembers (queue_id, user_id, join_order) VALUES (?, ?, ?)", 
-                            (queue_id, user_id, new_position))
-            
-            db.connection.commit()
+                bot.reply_to(message, f"Невозможно изменить позицию пользователя '{user_name}'.")
+                return
         
         # Формируем сообщение с обновленной информацией об очереди
         queue_info = format_queue_info(queue_name, queue_id)
@@ -1241,22 +1200,11 @@ def skip_position(message):
             return
         
         # Перемещаем пользователя на одну позицию назад
-        with db.db_lock:
-            # Обновляем позицию пользователя, который будет перемещен вперед
-            db.cursor.execute("""
-                UPDATE QueueMembers 
-                SET join_order = ? 
-                WHERE queue_id = ? AND join_order = ?
-            """, (user_order, queue_id, user_order + 1))
-            
-            # Обновляем позицию текущего пользователя
-            db.cursor.execute("""
-                UPDATE QueueMembers 
-                SET join_order = ? 
-                WHERE queue_id = ? AND user_id = ?
-            """, (user_order + 1, queue_id, user_id))
-            
-            db.connection.commit()
+        success = db.skip_position_in_queue(queue_id, user_id)
+        
+        if not success:
+            bot.reply_to(message, f"Невозможно пропустить позицию в очереди '{queue_name}'.")
+            return
         
         # Формируем сообщение с обновленной информацией об очереди
         queue_info = format_queue_info(queue_name, queue_id)

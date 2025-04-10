@@ -225,12 +225,96 @@ def get_queue_creator(queue_id):
         result = cursor.fetchone()
         return result[0] if result else None
 
-def update_user_display_name(user_id, new_name):
+def update_display_name(user_id, display_name):
     """Обновление отображаемого имени пользователя"""
     with db_lock:
-        cursor.execute("UPDATE Users SET display_name = ? WHERE user_id = ?", 
-                      (new_name, user_id))
+        cursor.execute("UPDATE Users SET display_name = ? WHERE user_id = ?", (display_name, user_id))
         connection.commit()
+
+def update_username(user_id, username):
+    """Обновление только username пользователя"""
+    with db_lock:
+        cursor.execute("UPDATE Users SET username = ? WHERE user_id = ?", (username, user_id))
+        connection.commit()
+
+def skip_position_in_queue(queue_id, user_id):
+    """Перемещение пользователя на одну позицию назад в очереди"""
+    with db_lock:
+        # Получаем текущую позицию пользователя
+        cursor.execute("SELECT join_order FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
+                      (queue_id, user_id))
+        result = cursor.fetchone()
+        if not result:
+            return False
+        
+        user_order = result[0]
+        
+        # Получаем количество участников в очереди
+        cursor.execute("SELECT COUNT(*) FROM QueueMembers WHERE queue_id = ?", (queue_id,))
+        members_count = cursor.fetchone()[0]
+        
+        # Проверяем, не последний ли пользователь в очереди
+        if user_order == members_count:
+            return False
+        
+        # Обновляем позицию пользователя, который будет перемещен вперед
+        cursor.execute("""
+            UPDATE QueueMembers 
+            SET join_order = ? 
+            WHERE queue_id = ? AND join_order = ?
+        """, (user_order, queue_id, user_order + 1))
+        
+        # Обновляем позицию текущего пользователя
+        cursor.execute("""
+            UPDATE QueueMembers 
+            SET join_order = ? 
+            WHERE queue_id = ? AND user_id = ?
+        """, (user_order + 1, queue_id, user_id))
+        
+        connection.commit()
+        return True
+
+def set_user_position(queue_id, user_id, new_position):
+    """Изменение позиции пользователя в очереди"""
+    with db_lock:
+        # Получаем текущую позицию пользователя
+        cursor.execute("SELECT join_order FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
+                      (queue_id, user_id))
+        result = cursor.fetchone()
+        if not result:
+            return False, None
+        
+        user_order = result[0]
+        
+        # Если новая позиция совпадает с текущей, ничего не делаем
+        if user_order == new_position:
+            return False, user_order
+        
+        # Временно удаляем пользователя из очереди
+        cursor.execute("DELETE FROM QueueMembers WHERE queue_id = ? AND user_id = ?", 
+                     (queue_id, user_id))
+        
+        # Если перемещаем вверх (на меньшую позицию)
+        if new_position < user_order:
+            cursor.execute("""
+                UPDATE QueueMembers 
+                SET join_order = join_order + 1 
+                WHERE queue_id = ? AND join_order >= ? AND join_order < ?
+            """, (queue_id, new_position, user_order))
+        # Если перемещаем вниз (на большую позицию)
+        else:
+            cursor.execute("""
+                UPDATE QueueMembers 
+                SET join_order = join_order - 1 
+                WHERE queue_id = ? AND join_order > ? AND join_order <= ?
+            """, (queue_id, user_order, new_position))
+        
+        # Добавляем пользователя на новую позицию
+        cursor.execute("INSERT INTO QueueMembers (queue_id, user_id, join_order) VALUES (?, ?, ?)", 
+                     (queue_id, user_id, new_position))
+        
+        connection.commit()
+        return True, user_order
 
 def close_connection():
     """Закрытие соединения с базой данных"""

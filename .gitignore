@@ -19,6 +19,7 @@ htmlcov/
 venv/
 env/
 ENV/
+.venv/
 
 # Игнорировать файлы IDE
 .idea/
