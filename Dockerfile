@@ -12,9 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
-# Create volume for persistent database storage
-VOLUME ["/app/data"]
-
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 
