@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  queuemate-bot:
+    build: .
+    volumes:
+      - ./botdb.db:/app/botdb.db
+      - ./bot.log:/app/bot.log
+    env_file:
+      - .env
+    restart: unless-stopped
