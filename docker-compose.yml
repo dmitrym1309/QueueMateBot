@@ -1,11 +1,12 @@
-version: '3'
 
 services:
   queuemate-bot:
     build: .
     volumes:
-      - ./botdb.db:/app/botdb.db
-      - ./bot.log:/app/bot.log
+      - queuemate_bot_data:/app/data  # Используем именованный том для базы данных и логов
     env_file:
       - .env
     restart: unless-stopped
+
+volumes:
+  queuemate_bot_data: # Объявляем именованный том

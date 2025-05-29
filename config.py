@@ -10,7 +10,7 @@ if not BOT_TOKEN:
     raise ValueError("Environment variable BOT_TOKEN is not set. Please set it before running the bot.")
 
 # Настройки базы данных
-DB_NAME = 'botdb.db'
+DB_NAME = 'data/botdb.db'  # Путь внутри Docker-тома
 
 # Сообщения бота
 MESSAGES = {
